@@ -1,0 +1,154 @@
+---
+title: "Airline Baggage Complaints"
+author: "Tom Seitzer, Howard Ding, Grant Schugart, Max Peterson"
+date: "2024-02-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Exploration
+
+```{r cars}
+library(forecast)
+library(tseries)
+# load in the data set
+data_set <- read.csv('/Users/tomseitzer/Downloads/baggagecomplaints.csv')
+
+# create time series with the baggage complaints per passenger variable
+Baggage.ts <- ts(data_set$Baggage, start = c(2004, 1), end = c(2010,12), freq = 12)
+
+# separate training and validation data
+nValid <- 24
+# set training set as total - test data
+nTrain <- length(Baggage.ts) - nValid
+# partition data into training and test set
+train.ts <- window(Baggage.ts, start = c(2004, 1), end = c(2004,nTrain))
+valid.ts <- window(Baggage.ts, start = c(2004, nTrain + 1), end = c(2004, nTrain + nValid))
+
+# plot the time series
+plot(Baggage.ts, ylim = c(0, 35000), ylab = "Baggage Complaints",
+     xlab = "Time", bty = "l", xaxt = "n",
+     xlim = c(2004,2015), main = "", lty = 1)
+axis(1, at = seq(2004, 2014, 1), labels = format(seq(2004, 2014, 1)))
+lines(valid.ts, col = 'blue')
+lines(c(2009, 2009), c(0, 30000))
+lines(c(2011, 2011), c(0, 30000))
+
+text(2006, 32000, "Training")
+text(2010, 32000, "Validation")
+arrows(2004, 30000, 2008.9, 30000, code = 3, length = 0.1, lwd = 1,angle = 30)
+arrows(2009.1, 30000, 2010.9, 30000, code = 3, length = 0.1, lwd = 1,angle = 30)
+```
+
+It looks like there is a seasonal pattern in the data, as well as linear and quadratic, and possibly a cyclical component as well. We will investigate these components further in the next section.
+```{r}
+# fit a linear trend model
+Baggage.lm <- tslm(Baggage.ts ~ trend)
+summary(Baggage.lm)
+# R-squared is 10% which is worth adding
+
+# fit a quadratic trend model
+Baggage.quad <- tslm(Baggage.ts ~ trend + I(trend^2))
+summary(Baggage.quad)
+# R-squared is 43% so it is also worth adding
+
+# fit a seasonal model
+Baggage.season <- tslm(Baggage.ts ~ trend + I(trend^2) + season)
+summary(Baggage.season)
+# R-squared is 69% so we are getting even better 
+
+# plot the detrended data
+DTbaggage <- Baggage.season$residuals
+plot(DTbaggage, ylab = "Residuals", xlab = "Time", bty = "l", xaxt = "n",
+     xlim = c(2004,2015), main = "", lty = 1)
+axis(1, at = seq(2004, 2014, 1), labels = format(seq(2004, 2014, 1)))
+# just looking at the plot it looks like there might also be a cyclical component
+```
+
+We have added a linear trend, quadratic trend, and seasonal component to the model, with the R-squared values increasing with each addition. In plotting the residuals it appears there may be a cyclical component as well.We will now investigate the cyclical component of the data.
+
+```{r}
+# fit a cycle model
+t <- 1:length(Baggage.ts)
+#Trying a cyclical component
+cyc1<-sin(2*pi*t/50)
+cyc2<-cos(2*pi*t/50) 
+Baggage.cyc<-tslm(Baggage.ts~cyc1+cyc2)
+summary(Baggage.cyc)
+# cyclical component is significant so we will add it in
+
+# now we will add all the components together
+Baggage.final_model<-tslm(Baggage.ts ~ trend+I(trend^2)+season+cyc1+cyc2)
+summary(Baggage.final_model)
+# R-squared is 93% which is good
+
+# plot the detrended data
+DTbaggage_final <- Baggage.final_model$residuals
+plot(DTbaggage_final, ylab = "Residuals", xlab = "Time", bty = "l", xaxt = "n",
+     xlim = c(2004,2015), main = "", lty = 1)
+axis(1, at = seq(2004, 2014, 1), labels = format(seq(2004, 2014, 1)))
+```
+
+Judging based off the plot of the residuals, it looks like we have captured the cyclical component of the data. We will now use this model to forecast the number of baggage complaints for the next 24 months.
+
+```{r}
+#############
+# plot the original data with the fitted values from our final model
+baggage_final_preds <- forecast(Baggage.final_model, h = 84, level = 0)
+# plot 
+plot(baggage_final_preds, ylim = c(-30000, 35000), ylab = "Baggage Complaints per Customer",
+     xlab = "Time", bty = "l", xaxt = "n",
+     xlim = c(2004,2013), main = "", lty = 1)
+axis(1, at = seq(2004, 2015, 1), labels = format(seq(2004, 2015, 1)))
+
+lines(baggage_final_preds$fitted, lwd = 2)
+lines(valid.ts, col = 'blue')
+lines(c(2009, 2009), c(0, 30000))
+lines(c(2011, 2011), c(0, 30000))
+
+text(2006, 32000, "Training")
+text(2010, 32000, "Validation")
+text(2012, 32000, "Future")
+arrows(2004, 30000, 2008.9, 30000, code = 3, length = 0.1, lwd = 1,angle = 30)
+arrows(2009.1, 30000, 2010.9, 30000, code = 3, length = 0.1, lwd = 1,angle = 30)
+arrows(2011.1, 30000, 2013, 30000, code = 3, length = 0.1, lwd = 1,angle = 30)
+legend('bottomright', legend = c('Data', 'Fitted Values'), col = c('black', 'Blue'), lty = 1, bty = 'n')
+
+```
+
+The model has an issue - the quadratic component is causing the model to overfit the data and predict negative values for baggage complaints so we will remove the quadratic component and refit the model.
+
+```{r}
+
+# refit model
+Baggage.refit<-tslm(Baggage.ts ~ trend+season+cyc1+cyc2)
+summary(Baggage.refit)
+
+# plot the original data with the fitted values from our final model
+baggage_refit_preds <- forecast(Baggage.refit, h = 84, level = 0)
+# plot 
+plot(baggage_refit_preds, ylim = c(0, 35000), ylab = "Baggage Complaints per Customer",
+     xlab = "Time", bty = "l", xaxt = "n",
+     xlim = c(2004,2013), main = "", lty = 1)
+axis(1, at = seq(2004, 2015, 1), labels = format(seq(2004, 2015, 1)))
+
+lines(baggage_refit_preds$fitted, lwd = 2, col = 'red')
+lines(valid.ts, col = 'blue')
+lines(c(2009, 2009), c(0, 30000))
+lines(c(2011, 2011), c(0, 30000))
+
+text(2006, 32000, "Training")
+text(2010, 32000, "Validation")
+text(2012, 32000, "Future")
+arrows(2004, 30000, 2008.9, 30000, code = 3, length = 0.1, lwd = 1,angle = 30)
+arrows(2009.1, 30000, 2010.9, 30000, code = 3, length = 0.1, lwd = 1,angle = 30)
+arrows(2011.1, 30000, 2013, 30000, code = 3, length = 0.1, lwd = 1,angle = 30)
+legend('bottomleft', legend = c('Data', 'Fitted Values', 'Future'), col = c('black', 'red','blue'), lty = 1, bty = 'n')
+
+```
+
+The model has been refit and the quadratic component has been removed. The model now predicts positive values for baggage complaints. The model has been used to forecast the number of baggage complaints for the next 24 months.
+
